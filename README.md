@@ -1,6 +1,14 @@
 # Claw Code
 
 <p align="center">
+  <strong>188K GitHub stars and climbing.</strong>
+</p>
+
+<p align="center">
+  <strong>Rust-native agent execution for people who want speed, control, and a real terminal.</strong>
+</p>
+
+<p align="center">
   <a href="https://github.com/ultraworkers/claw-code">ultraworkers/claw-code</a>
   ·
   <a href="./USAGE.md">Usage</a>
@@ -28,8 +36,21 @@
   <img src="assets/claw-hero.jpeg" alt="Claw Code" width="300" />
 </p>
 
-Claw Code is the public Rust implementation of the `claw` CLI agent harness.
-The canonical implementation lives in [`rust/`](./rust), and the current source of truth for this repository is **ultraworkers/claw-code**.
+<p align="center">
+  Claw Code just crossed <strong>188,000 GitHub stars</strong>. This repo is the public Rust implementation of the <code>claw</code> CLI agent harness, built in the open with the UltraWorkers community.
+</p>
+
+<p align="center">
+  The canonical implementation lives in <a href="./rust/">rust/</a>, and the current source of truth for this repository is <strong>ultraworkers/claw-code</strong>.
+</p>
+
+## 188K and climbing
+
+Thanks to everyone who starred, tested, reviewed, and pushed the project forward. Claw Code is focused on a straightforward promise: a fast local-first CLI agent runtime with native tools, inspectable behavior, and a Rust workspace that stays close to the metal.
+
+- Native Rust workspace and CLI binary under [`rust/`](./rust)
+- Local-first workflows for prompts, sessions, tooling, and parity validation
+- Open development across the broader UltraWorkers ecosystem
 
 > [!IMPORTANT]
 > Start with [`USAGE.md`](./USAGE.md) for build, auth, CLI, session, and parity-harness workflows. Make `claw doctor` your first health check after building, use [`rust/README.md`](./rust/README.md) for crate-level details, read [`PARITY.md`](./PARITY.md) for the current Rust-port checkpoint, and see [`docs/container.md`](./docs/container.md) for the container-first workflow.
