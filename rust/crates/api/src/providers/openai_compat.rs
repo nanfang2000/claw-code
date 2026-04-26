@@ -801,7 +801,10 @@ fn strip_routing_prefix(model: &str) -> &str {
         let prefix = &model[..pos];
         // Only strip if the prefix before "/" is a known routing prefix,
         // not if "/" appears in the middle of the model name for other reasons.
-        if matches!(prefix, "openai" | "xai" | "grok" | "qwen" | "kimi") {
+        if matches!(
+            prefix,
+            "openai" | "xai" | "grok" | "qwen" | "kimi" | "minimax" | "abab"
+        ) {
             &model[pos + 1..]
         } else {
             model
@@ -809,6 +812,11 @@ fn strip_routing_prefix(model: &str) -> &str {
     } else {
         model
     }
+}
+
+fn is_minimax_model(model: &str) -> bool {
+    let lowered = model.to_ascii_lowercase();
+    lowered.contains("minimax") || lowered.starts_with("abab")
 }
 
 /// Estimate the serialized JSON size of a request payload in bytes.
@@ -867,21 +875,23 @@ pub fn build_chat_completion_request(
     // still proceed with the remaining history intact.
     messages = sanitize_tool_message_pairing(messages);
 
-    // gpt-5* requires `max_completion_tokens`; older OpenAI models accept both.
-    // We send the correct field based on the wire model name so gpt-5.x requests
-    // don't fail with "unknown field max_tokens".
-    let max_tokens_key = if wire_model.starts_with("gpt-5") {
-        "max_completion_tokens"
-    } else {
-        "max_tokens"
-    };
-
     let mut payload = json!({
         "model": wire_model,
-        max_tokens_key: request.max_tokens,
         "messages": messages,
         "stream": request.stream,
     });
+    if is_minimax_model(wire_model) {
+        // MiniMax v2 chat completion variants often reject `max_tokens`.
+        payload["tokens_to_generate"] = json!(request.max_tokens);
+    } else {
+        // gpt-5* requires `max_completion_tokens`; older OpenAI models accept both.
+        let max_tokens_key = if wire_model.starts_with("gpt-5") {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        payload[max_tokens_key] = json!(request.max_tokens);
+    }
 
     if request.stream && should_request_stream_usage(config) {
         payload["stream_options"] = json!({ "include_usage": true });
