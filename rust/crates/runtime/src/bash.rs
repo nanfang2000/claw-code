@@ -99,6 +99,26 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
         });
     }
 
+    // Avoid nested runtime panic when bash tool is invoked inside an existing
+    // tokio worker (agent runtime path).
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let handle = std::thread::Builder::new()
+            .name("claw-bash-runtime".to_string())
+            .spawn(move || run_bash_with_local_runtime(input, sandbox_status, cwd))
+            .map_err(io::Error::other)?;
+        return handle
+            .join()
+            .map_err(|_| io::Error::other("bash runtime thread panicked"))?;
+    }
+
+    run_bash_with_local_runtime(input, sandbox_status, cwd)
+}
+
+fn run_bash_with_local_runtime(
+    input: BashCommandInput,
+    sandbox_status: SandboxStatus,
+    cwd: std::path::PathBuf,
+) -> io::Result<BashCommandOutput> {
     let runtime = Builder::new_current_thread().enable_all().build()?;
     runtime.block_on(execute_bash_async(input, sandbox_status, cwd))
 }
@@ -348,6 +368,39 @@ mod tests {
         .expect("bash command should execute");
 
         assert!(!output.sandbox_status.expect("sandbox status").enabled);
+    }
+
+    #[test]
+    fn execute_bash_inside_tokio_worker_does_not_panic() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        let join_result = runtime.block_on(async {
+            tokio::spawn(async {
+                execute_bash(BashCommandInput {
+                    command: String::from("printf 'ok'"),
+                    timeout: Some(1_000),
+                    description: None,
+                    run_in_background: Some(false),
+                    dangerously_disable_sandbox: Some(false),
+                    namespace_restrictions: Some(false),
+                    isolate_network: Some(false),
+                    filesystem_mode: Some(FilesystemIsolationMode::WorkspaceOnly),
+                    allowed_mounts: None,
+                })
+            })
+            .await
+        });
+
+        assert!(
+            join_result.is_ok(),
+            "execute_bash should not panic inside tokio worker"
+        );
+        let result = join_result.expect("join result should be available");
+        assert!(result.is_ok(), "bash command should still execute successfully");
     }
 }
 
