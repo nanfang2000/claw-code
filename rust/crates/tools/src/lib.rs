@@ -2262,13 +2262,13 @@ struct GlobSearchInputValue {
     path: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct WebFetchInput {
     url: String,
     prompt: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct WebSearchInput {
     query: String,
     allowed_domains: Option<Vec<String>>,
@@ -2744,91 +2744,113 @@ struct SearchHit {
     url: String,
 }
 
-fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput, String> {
-    let started = Instant::now();
-    let client = build_http_client()?;
-    let request_url = normalize_fetch_url(&input.url)?;
-    let response = client
-        .get(request_url.clone())
-        .send()
+fn run_in_dedicated_blocking_thread<T, F>(job: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    let handle = std::thread::Builder::new()
+        .name("claw-tools-http".to_string())
+        .spawn(job)
         .map_err(|error| error.to_string())?;
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err("tool execution thread panicked".to_string()),
+    }
+}
 
-    let status = response.status();
-    let final_url = response.url().to_string();
-    let code = status.as_u16();
-    let code_text = status.canonical_reason().unwrap_or("Unknown").to_string();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-    let body = response.text().map_err(|error| error.to_string())?;
-    let bytes = body.len();
-    let normalized = normalize_fetched_content(&body, &content_type);
-    let result = summarize_web_fetch(&final_url, &input.prompt, &normalized, &body, &content_type);
+fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput, String> {
+    let input = input.clone();
+    run_in_dedicated_blocking_thread(move || {
+        let started = Instant::now();
+        let client = build_http_client()?;
+        let request_url = normalize_fetch_url(&input.url)?;
+        let response = client
+            .get(request_url.clone())
+            .send()
+            .map_err(|error| error.to_string())?;
 
-    Ok(WebFetchOutput {
-        bytes,
-        code,
-        code_text,
-        result,
-        duration_ms: started.elapsed().as_millis(),
-        url: final_url,
+        let status = response.status();
+        let final_url = response.url().to_string();
+        let code = status.as_u16();
+        let code_text = status.canonical_reason().unwrap_or("Unknown").to_string();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let body = response.text().map_err(|error| error.to_string())?;
+        let bytes = body.len();
+        let normalized = normalize_fetched_content(&body, &content_type);
+        let result =
+            summarize_web_fetch(&final_url, &input.prompt, &normalized, &body, &content_type);
+
+        Ok(WebFetchOutput {
+            bytes,
+            code,
+            code_text,
+            result,
+            duration_ms: started.elapsed().as_millis(),
+            url: final_url,
+        })
     })
 }
 
 fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
-    let started = Instant::now();
-    let client = build_http_client()?;
-    let search_url = build_search_url(&input.query)?;
-    let response = client
-        .get(search_url)
-        .send()
-        .map_err(|error| error.to_string())?;
+    let input = input.clone();
+    run_in_dedicated_blocking_thread(move || {
+        let started = Instant::now();
+        let client = build_http_client()?;
+        let search_url = build_search_url(&input.query)?;
+        let response = client
+            .get(search_url)
+            .send()
+            .map_err(|error| error.to_string())?;
 
-    let final_url = response.url().clone();
-    let html = response.text().map_err(|error| error.to_string())?;
-    let mut hits = extract_search_hits(&html);
+        let final_url = response.url().clone();
+        let html = response.text().map_err(|error| error.to_string())?;
+        let mut hits = extract_search_hits(&html);
 
-    if hits.is_empty() && final_url.host_str().is_some() {
-        hits = extract_search_hits_from_generic_links(&html);
-    }
+        if hits.is_empty() && final_url.host_str().is_some() {
+            hits = extract_search_hits_from_generic_links(&html);
+        }
 
-    if let Some(allowed) = input.allowed_domains.as_ref() {
-        hits.retain(|hit| host_matches_list(&hit.url, allowed));
-    }
-    if let Some(blocked) = input.blocked_domains.as_ref() {
-        hits.retain(|hit| !host_matches_list(&hit.url, blocked));
-    }
+        if let Some(allowed) = input.allowed_domains.as_ref() {
+            hits.retain(|hit| host_matches_list(&hit.url, allowed));
+        }
+        if let Some(blocked) = input.blocked_domains.as_ref() {
+            hits.retain(|hit| !host_matches_list(&hit.url, blocked));
+        }
 
-    dedupe_hits(&mut hits);
-    hits.truncate(8);
+        dedupe_hits(&mut hits);
+        hits.truncate(8);
 
-    let summary = if hits.is_empty() {
-        format!("No web search results matched the query {:?}.", input.query)
-    } else {
-        let rendered_hits = hits
-            .iter()
-            .map(|hit| format!("- [{}]({})", hit.title, hit.url))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!(
-            "Search results for {:?}. Include a Sources section in the final answer.\n{}",
-            input.query, rendered_hits
-        )
-    };
+        let summary = if hits.is_empty() {
+            format!("No web search results matched the query {:?}.", input.query)
+        } else {
+            let rendered_hits = hits
+                .iter()
+                .map(|hit| format!("- [{}]({})", hit.title, hit.url))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "Search results for {:?}. Include a Sources section in the final answer.\n{}",
+                input.query, rendered_hits
+            )
+        };
 
-    Ok(WebSearchOutput {
-        query: input.query.clone(),
-        results: vec![
-            WebSearchResultItem::Commentary(summary),
-            WebSearchResultItem::SearchResult {
-                tool_use_id: String::from("web_search_1"),
-                content: hits,
-            },
-        ],
-        duration_seconds: started.elapsed().as_secs_f64(),
+        Ok(WebSearchOutput {
+            query: input.query.clone(),
+            results: vec![
+                WebSearchResultItem::Commentary(summary),
+                WebSearchResultItem::SearchResult {
+                    tool_use_id: String::from("web_search_1"),
+                    content: hits,
+                },
+            ],
+            duration_seconds: started.elapsed().as_secs_f64(),
+        })
     })
 }
 
@@ -6243,6 +6265,76 @@ mod tests {
     fn rejects_unknown_tool_names() {
         let error = execute_tool("nope", &json!({})).expect_err("tool should be rejected");
         assert!(error.contains("unsupported tool"));
+    }
+
+    #[test]
+    fn web_search_inside_tokio_worker_does_not_panic() {
+        let _guard = env_guard();
+        std::env::set_var("CLAWD_WEB_SEARCH_BASE_URL", "http://127.0.0.1:1/");
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        let join_result = runtime.block_on(async {
+            tokio::spawn(async {
+                execute_tool(
+                    "WebSearch",
+                    &json!({
+                        "query": "runtime-drop panic regression"
+                    }),
+                )
+            })
+            .await
+        });
+
+        std::env::remove_var("CLAWD_WEB_SEARCH_BASE_URL");
+
+        assert!(
+            join_result.is_ok(),
+            "WebSearch should not panic in tokio worker thread"
+        );
+        let tool_result = join_result.expect("join result should be available");
+        assert!(
+            tool_result.is_err(),
+            "Using localhost:1 should fail with request error, not panic"
+        );
+    }
+
+    #[test]
+    fn web_fetch_inside_tokio_worker_does_not_panic() {
+        let _guard = env_guard();
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        let join_result = runtime.block_on(async {
+            tokio::spawn(async {
+                execute_tool(
+                    "WebFetch",
+                    &json!({
+                        "url": "http://127.0.0.1:1/",
+                        "prompt": "summary"
+                    }),
+                )
+            })
+            .await
+        });
+
+        assert!(
+            join_result.is_ok(),
+            "WebFetch should not panic in tokio worker thread"
+        );
+        let tool_result = join_result.expect("join result should be available");
+        assert!(
+            tool_result.is_err(),
+            "Using localhost:1 should fail with request error, not panic"
+        );
     }
 
     #[test]
