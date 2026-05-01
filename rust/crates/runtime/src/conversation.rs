@@ -56,7 +56,12 @@ pub trait ApiClient {
 
 /// Trait implemented by tool dispatchers that execute model-requested tools.
 pub trait ToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError>;
+    fn execute(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        tool_call_id: &str,
+    ) -> Result<String, ToolError>;
 }
 
 /// Error returned when a tool invocation fails locally.
@@ -304,7 +309,10 @@ where
         // Verify tool executor is responsive with a non-destructive probe
         // Using glob_search with a pattern that won't match anything
         let probe_input = r#"{"pattern": "*.health-check-probe-"}"#;
-        match self.tool_executor.execute("glob_search", probe_input) {
+        match self
+            .tool_executor
+            .execute("glob_search", probe_input, "health-check-probe")
+        {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Tool executor probe failed: {e}")),
         }
@@ -447,8 +455,10 @@ where
                 let result_message = match permission_outcome {
                     PermissionOutcome::Allow => {
                         self.record_tool_started(iterations, &tool_name);
-                        let (mut output, mut is_error) =
-                            match self.tool_executor.execute(&tool_name, &effective_input) {
+                        let (mut output, mut is_error) = match self
+                            .tool_executor
+                            .execute(&tool_name, &effective_input, &tool_use_id)
+                        {
                                 Ok(output) => (output, false),
                                 Err(error) => (error.to_string(), true),
                             };
@@ -812,7 +822,12 @@ impl StaticToolExecutor {
 }
 
 impl ToolExecutor for StaticToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        _tool_call_id: &str,
+    ) -> Result<String, ToolError> {
         self.handlers
             .get_mut(tool_name)
             .ok_or_else(|| ToolError::new(format!("unknown tool: {tool_name}")))?(input)
@@ -1730,7 +1745,7 @@ mod tests {
 
         // when
         let error = executor
-            .execute("missing", "{}")
+            .execute("missing", "{}", "tool-missing")
             .expect_err("unregistered tools should fail");
 
         // then

@@ -4741,7 +4741,12 @@ impl SubagentToolExecutor {
 }
 
 impl ToolExecutor for SubagentToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        _tool_call_id: &str,
+    ) -> Result<String, ToolError> {
         if !self.allowed_tools.contains(tool_name) {
             return Err(ToolError::new(format!(
                 "tool `{tool_name}` is not enabled for this sub-agent"
@@ -6955,6 +6960,7 @@ mod tests {
                     "content": "blocked"
                 })
                 .to_string(),
+                "tool-write-file-denied",
             )
             .expect_err("subagent write tool should be denied before dispatch");
 
