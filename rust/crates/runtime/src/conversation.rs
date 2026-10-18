@@ -356,6 +356,11 @@ where
                 self.record_turn_failed(iterations, &error);
                 return Err(error);
             }
+            if iterations == self.max_iterations {
+                self.session
+                    .push_user_text("检索轮次已到上限。不要再调用任何工具。请根据目前已经获得的证据，直接输出最终结果。")
+                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+            }
 
             let request = ApiRequest {
                 system_prompt: self.system_prompt.clone(),
